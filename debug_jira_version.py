@@ -55,13 +55,164 @@ def test_jql_query(jira_url: str, auth: HTTPBasicAuth, jql: str):
     return response.json()
 
 
+def list_all_projects(jira_url: str, auth: HTTPBasicAuth):
+    """List all available projects"""
+    url = f"{jira_url}/rest/api/3/project"
+    headers = {"Accept": "application/json"}
+    
+    response = requests.get(url, headers=headers, auth=auth)
+    response.raise_for_status()
+    
+    return response.json()
+
+
+def search_by_version_only(jira_url: str, auth: HTTPBasicAuth, version_name: str):
+    """Search issues by version without specifying project"""
+    jql = f'fixVersion = "{version_name}"'
+    
+    url = f"{jira_url}/rest/api/3/search/jql"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "jql": jql,
+        "fields": ["key", "summary", "project"],
+        "maxResults": 100
+    }
+    
+    response = requests.post(url, headers=headers, auth=auth, json=payload)
+    response.raise_for_status()
+    
+    return response.json()
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python debug_jira_version.py <PROJECT_KEY> [VERSION_SEARCH]")
-        print("\nExample: python debug_jira_version.py PP 43.68")
-        print("         python debug_jira_version.py PP")
+        print("Usage:")
+        print("  python debug_jira_version.py --list-projects")
+        print("  python debug_jira_version.py --search-version <VERSION>")
+        print("  python debug_jira_version.py <PROJECT_KEY> [VERSION_SEARCH]")
+        print("\nExamples:")
+        print("  python debug_jira_version.py --list-projects")
+        print("  python debug_jira_version.py --search-version 43.68.5")
+        print("  python debug_jira_version.py PP 43.68")
+        print("  python debug_jira_version.py PP")
         sys.exit(1)
     
+    jira_url, username, token = get_jira_credentials()
+    auth = HTTPBasicAuth(username, token)
+    
+    # Handle --list-projects flag
+    if sys.argv[1] == "--list-projects":
+        print("📋 Fetching all projects...")
+        print(f"{'='*70}\n")
+        
+        try:
+            projects = list_all_projects(jira_url, auth)
+            
+            if not projects:
+                print("❌ No projects found")
+                return
+            
+            print(f"✅ Found {len(projects)} projects\n")
+            print(f"{'KEY':<15} {'NAME':<40} {'TYPE':<15}")
+            print(f"{'-'*15} {'-'*40} {'-'*15}")
+            
+            for project in sorted(projects, key=lambda x: x['key']):
+                key = project.get('key', 'N/A')
+                name = project.get('name', 'N/A')
+                project_type = project.get('projectTypeKey', 'N/A')
+                
+                if len(name) > 37:
+                    name = name[:37] + "..."
+                
+                print(f"{key:<15} {name:<40} {project_type:<15}")
+            
+            print(f"\n{'='*70}")
+            
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            sys.exit(1)
+        
+        return
+    
+    # Handle --search-version flag
+    if sys.argv[1] == "--search-version":
+        if len(sys.argv) < 3:
+            print("❌ Error: Please provide version name")
+            print("Usage: python debug_jira_version.py --search-version <VERSION>")
+            sys.exit(1)
+        
+        version_name = sys.argv[2]
+        print(f"🔍 Searching for version: {version_name}")
+        print(f"{'='*70}\n")
+        
+        try:
+            result = search_by_version_only(jira_url, auth, version_name)
+            total = result.get('total', 0)
+            issues = result.get('issues', [])
+            
+            if total == 0:
+                print(f"❌ No issues found with fixVersion = \"{version_name}\"")
+                print("\nTips:")
+                print("  - Check if the version name is exactly correct")
+                print("  - Try using --list-projects to see all projects")
+                print("  - Try searching for part of the version name")
+                return
+            
+            print(f"✅ Found {total} issues with this version\n")
+            
+            # Group by project
+            projects_found = {}
+            for issue in issues:
+                project_key = issue['fields']['project']['key']
+                project_name = issue['fields']['project']['name']
+                
+                if project_key not in projects_found:
+                    projects_found[project_key] = {
+                        'name': project_name,
+                        'issues': []
+                    }
+                
+                projects_found[project_key]['issues'].append(issue['key'])
+            
+            print(f"{'PROJECT':<15} {'PROJECT NAME':<30} {'ISSUES':<10}")
+            print(f"{'-'*15} {'-'*30} {'-'*10}")
+            
+            for proj_key, proj_data in sorted(projects_found.items()):
+                name = proj_data['name']
+                count = len(proj_data['issues'])
+                
+                if len(name) > 27:
+                    name = name[:27] + "..."
+                
+                print(f"{proj_key:<15} {name:<30} {count:<10}")
+            
+            print(f"\n{'='*70}")
+            print("💡 To export release notes for a specific project, use:")
+            first_project = list(projects_found.keys())[0]
+            print(f"   python jira_export_v3_fixed.py {first_project} \"{version_name}\"")
+            print(f"{'='*70}")
+            
+            # Show some example issues
+            if issues:
+                print(f"\n📝 Example issues (showing first 10):")
+                for issue in issues[:10]:
+                    key = issue['key']
+                    summary = issue['fields']['summary']
+                    if len(summary) > 50:
+                        summary = summary[:50] + "..."
+                    print(f"  {key} - {summary}")
+            
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            sys.exit(1)
+        
+        return
+    
+    # Original functionality - project-specific search
     project_key = sys.argv[1]
     version_search = sys.argv[2] if len(sys.argv) > 2 else None
     
