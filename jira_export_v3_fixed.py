@@ -27,7 +27,7 @@ def get_jira_credentials():
     return jira_url, jira_username, jira_token
 
 
-def search_issues(jira_url: str, auth: HTTPBasicAuth, jql: str, fields: str, max_results: int = 1000) -> Dict[str, Any]:
+def search_issues(jira_url: str, auth: HTTPBasicAuth, jql: str, fields: list, max_results: int = 1000) -> Dict[str, Any]:
     """
     Search Jira issues using API v3 with the correct /rest/api/3/search/jql endpoint
     
@@ -35,7 +35,7 @@ def search_issues(jira_url: str, auth: HTTPBasicAuth, jql: str, fields: str, max
         jira_url: Jira instance URL
         auth: HTTPBasicAuth object
         jql: JQL query string
-        fields: Comma-separated list of fields
+        fields: List of fields
         max_results: Maximum number of results
     
     Returns:
@@ -51,7 +51,7 @@ def search_issues(jira_url: str, auth: HTTPBasicAuth, jql: str, fields: str, max
     # Use POST instead of GET for better JQL support
     payload = {
         "jql": jql,
-        "fields": fields.split(','),
+        "fields": fields,
         "maxResults": max_results
     }
     
@@ -63,7 +63,7 @@ def search_issues(jira_url: str, auth: HTTPBasicAuth, jql: str, fields: str, max
 
 def export_issues_by_version(project_key: str, fix_version: str, output_file: str = None) -> Dict[str, Any]:
     """
-    Export Jira issues by fixVersion to JSON grouped by issue type
+    Export Jira issues by fixVersion to JSON grouped by Release announce type
     
     Args:
         project_key: Jira project key (e.g., 'PROJ')
@@ -71,20 +71,22 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
         output_file: Optional output file path (default: release_notes_{version}.json)
     
     Returns:
-        Dictionary with issues grouped by type and list of components
+        Dictionary with issues grouped by Release announce type and list of components
     """
     jira_url, username, token = get_jira_credentials()
     auth = HTTPBasicAuth(username, token)
     
     # JQL query to find issues
-    jql = f'project = {project_key} AND fixVersion = "{fix_version}" ORDER BY issuetype ASC, key ASC'
+    jql = f'project = {project_key} AND fixVersion = "{fix_version}" ORDER BY key ASC'
     
     print(f"Searching for issues with JQL: {jql}")
     print(f"Using API endpoint: {jira_url}/rest/api/3/search/jql")
     
-    # Search issues with specific fields
+    # Search issues with specific fields including Release announce type (customfield_11823)
+    fields_to_fetch = ["key", "summary", "components", "customfield_11823"]
+    
     try:
-        result = search_issues(jira_url, auth, jql, "key,summary,components,issuetype")
+        result = search_issues(jira_url, auth, jql, fields_to_fetch)
         issues = result.get('issues', [])
         
         print(f"Found {len(issues)} issues (Total: {result.get('total', 0)})")
@@ -97,27 +99,34 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
         print(f"Error: {e}")
         sys.exit(1)
     
-    # Group issues by type and collect all components
+    # Group issues by Release announce type and collect all components
     grouped_data = {}
     all_components = set()
+    ungrouped_count = 0
     
     for issue in issues:
-        # Extract issue type
-        issue_type = issue['fields']['issuetype']['name']
-        
         # Extract components
         components = [comp['name'] for comp in issue['fields'].get('components', [])]
         all_components.update(components)
         
-        # Normalize issue type name for grouping
-        if issue_type.lower() in ['story', 'task', 'improvement']:
-            group_name = 'improvements'
-        elif issue_type.lower() == 'bug':
-            group_name = 'bug fixes'
-        elif issue_type.lower() == 'epic':
-            group_name = 'epics'
+        # Get Release announce type value (customfield_11823)
+        announce_type_field = issue['fields'].get('customfield_11823')
+        
+        # Determine group name based on Release announce type
+        if announce_type_field:
+            # Handle different field types (single select, multi-select, etc.)
+            if isinstance(announce_type_field, dict):
+                group_name = announce_type_field.get('value', announce_type_field.get('name', 'Other'))
+            elif isinstance(announce_type_field, list) and len(announce_type_field) > 0:
+                if isinstance(announce_type_field[0], dict):
+                    group_name = announce_type_field[0].get('value', announce_type_field[0].get('name', 'Other'))
+                else:
+                    group_name = str(announce_type_field[0])
+            else:
+                group_name = str(announce_type_field)
         else:
-            group_name = issue_type.lower() + 's'
+            group_name = "No announce type"
+            ungrouped_count += 1
         
         # Initialize group if not exists
         if group_name not in grouped_data:
@@ -125,6 +134,9 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
         
         # Add issue to group
         grouped_data[group_name].append(f"{issue['key']} - {issue['fields']['summary']}")
+    
+    if ungrouped_count > 0:
+        print(f"\n⚠️  Warning: {ungrouped_count} issues without Release announce type")
     
     # Create final export structure
     export_data = grouped_data.copy()
@@ -147,14 +159,14 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
 def print_summary(export_data: Dict[str, Any]):
     """Print a brief summary of exported issues"""
     print(f"\n{'='*60}")
-    print(f"RELEASE NOTES SUMMARY")
+    print(f"RELEASE NOTES SUMMARY (Grouped by Release announce type)")
     print(f"{'='*60}")
     
     # Count total issues
     total_issues = sum(len(issues) for key, issues in export_data.items() if key != 'components')
     print(f"Total issues: {total_issues}\n")
     
-    # Print issues by type
+    # Print issues by Release announce type
     for group_name, issues in export_data.items():
         if group_name == 'components':
             continue
