@@ -6,7 +6,7 @@
 
 ## 🎯 Особенности
 
-- ✅ Группировка по **Release announce type** (customfield_11823)
+- ✅ Группировка по **Release announce type**
 - ✅ Использует **Jira REST API v3** (`/rest/api/3/search/jql`)
 - ✅ Работает только с библиотекой `requests`
 - ✅ Экспорт списка всех компонентов
@@ -23,14 +23,14 @@ pip install requests
 
 ### Linux / macOS:
 ```bash
-export JIRA_URL="https://pragmaticplay.atlassian.net"
+export JIRA_URL=".."
 export JIRA_USERNAME="your-email@example.com"
 export JIRA_API_TOKEN="your-api-token"
 ```
 
 ### Windows (PowerShell):
 ```powershell
-$env:JIRA_URL="https://pragmaticplay.atlassian.net"
+$env:JIRA_URL="url"
 $env:JIRA_USERNAME="your-email@example.com"
 $env:JIRA_API_TOKEN="your-api-token"
 ```
@@ -65,7 +65,7 @@ python jira_export_v3_fixed.py PP 43.68.5
 ### Пример вывода скрипта в консоли:
 ```
 Searching for issues with JQL: project = PP AND fixVersion = "43.68.5" ORDER BY key ASC
-Using API endpoint: https://pragmaticplay.atlassian.net/rest/api/3/search/jql
+Using API endpoint: ..
 Found 12 issues (Total: 12)
 
 Exported 12 issues to release_notes_43_68_5.json
