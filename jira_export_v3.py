@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
 """
-Jira Release Notes Exporter
-Exports issues by fixVersion to JSON format
+Jira Release Notes Exporter (API v3)
+Exports issues by fixVersion to JSON format using Jira REST API v3
 """
 
 import os
 import json
 import sys
-from typing import List, Dict, Any
-
-try:
-    from atlassian import Jira
-except ImportError:
-    print("Error: atlassian-python-api not installed")
-    print("Install it with: pip install atlassian-python-api")
-    sys.exit(1)
+from typing import Dict, Any
+import requests
+from requests.auth import HTTPBasicAuth
 
 
-def get_jira_client() -> Jira:
-    """Initialize Jira client from environment variables"""
+def get_jira_credentials():
+    """Get Jira credentials from environment variables"""
     jira_url = os.getenv('JIRA_URL')
     jira_username = os.getenv('JIRA_USERNAME')
     jira_token = os.getenv('JIRA_API_TOKEN')
@@ -28,11 +23,39 @@ def get_jira_client() -> Jira:
         print("Required: JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN")
         sys.exit(1)
     
-    return Jira(
-        url=jira_url,
-        username=jira_username,
-        password=jira_token
-    )
+    return jira_url, jira_username, jira_token
+
+
+def search_issues(jira_url: str, auth: HTTPBasicAuth, jql: str, fields: str, max_results: int = 1000) -> Dict[str, Any]:
+    """
+    Search Jira issues using API v3
+    
+    Args:
+        jira_url: Jira instance URL
+        auth: HTTPBasicAuth object
+        jql: JQL query string
+        fields: Comma-separated list of fields
+        max_results: Maximum number of results
+    
+    Returns:
+        Dictionary with search results
+    """
+    url = f"{jira_url}/rest/api/3/search"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
+    params = {
+        "jql": jql,
+        "fields": fields,
+        "maxResults": max_results
+    }
+    
+    response = requests.get(url, headers=headers, auth=auth, params=params)
+    response.raise_for_status()
+    
+    return response.json()
 
 
 def export_issues_by_version(project_key: str, fix_version: str, output_file: str = None) -> Dict[str, Any]:
@@ -47,41 +70,35 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     Returns:
         Dictionary with issues grouped by type and list of components
     """
-    jira = get_jira_client()
+    jira_url, username, token = get_jira_credentials()
+    auth = HTTPBasicAuth(username, token)
     
     # JQL query to find issues
     jql = f'project = {project_key} AND fixVersion = "{fix_version}" ORDER BY issuetype ASC, key ASC'
     
     print(f"Searching for issues with JQL: {jql}")
+    print(f"Using API endpoint: {jira_url}/rest/api/3/search")
     
-    # Search issues with specific fields using the new API v3
-    # Using the search method which internally uses /rest/api/3/search
+    # Search issues with specific fields
     try:
-        issues = jira.jql(jql, fields='key,summary,components,issuetype', limit=1000)
+        result = search_issues(jira_url, auth, jql, "key,summary,components,issuetype")
+        issues = result.get('issues', [])
+        
+        print(f"Found {len(issues)} issues (Total: {result.get('total', 0)})")
+        
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP Error: {e}")
+        print(f"Response: {e.response.text}")
+        sys.exit(1)
     except Exception as e:
-        # Fallback to direct API call if jql method fails
-        import requests
-        from requests.auth import HTTPBasicAuth
-        
-        url = f"{jira.url}/rest/api/3/search"
-        auth = HTTPBasicAuth(jira.username, jira.password)
-        headers = {"Accept": "application/json"}
-        
-        params = {
-            "jql": jql,
-            "fields": "key,summary,components,issuetype",
-            "maxResults": 1000
-        }
-        
-        response = requests.get(url, headers=headers, auth=auth, params=params)
-        response.raise_for_status()
-        issues = response.json()
+        print(f"Error: {e}")
+        sys.exit(1)
     
     # Group issues by type and collect all components
     grouped_data = {}
     all_components = set()
     
-    for issue in issues.get('issues', []):
+    for issue in issues:
         # Extract issue type
         issue_type = issue['fields']['issuetype']['name']
         
@@ -90,9 +107,6 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
         all_components.update(components)
         
         # Normalize issue type name for grouping
-        # Story, Task, Improvement -> improvements
-        # Bug -> bug fixes
-        # Epic -> epics
         if issue_type.lower() in ['story', 'task', 'improvement']:
             group_name = 'improvements'
         elif issue_type.lower() == 'bug':
@@ -157,9 +171,9 @@ def print_summary(export_data: Dict[str, Any]):
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print("Usage: python jira_export.py <PROJECT_KEY> <FIX_VERSION> [output_file.json]")
-        print("\nExample: python jira_export.py PROJ 1.0.0")
-        print("         python jira_export.py PROJ '1.0.0' my_release_notes.json")
+        print("Usage: python jira_export_v3.py <PROJECT_KEY> <FIX_VERSION> [output_file.json]")
+        print("\nExample: python jira_export_v3.py PROJ 1.0.0")
+        print("         python jira_export_v3.py PROJ '1.0.0' my_release_notes.json")
         print("\nEnvironment variables required:")
         print("  JIRA_URL - Your Jira instance URL (e.g., https://your-domain.atlassian.net)")
         print("  JIRA_USERNAME - Your Jira username/email")

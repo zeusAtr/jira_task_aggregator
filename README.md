@@ -4,8 +4,27 @@
 
 📄 **[Посмотреть пример результата (example_output.json)](./example_output.json)**
 
+## 📌 Важно: Две версии скрипта
+
+### 🆕 **jira_export_v3.py** (Рекомендуется)
+- Использует **Jira REST API v3** (`/rest/api/3/search`)
+- Работает только с библиотекой `requests`
+- Более простой и надежный
+- **Используйте эту версию для новых проектов**
+
+### 📦 **jira_export.py** (Устаревшая)
+- Использует библиотеку `atlassian-python-api`
+- Может иметь проблемы с новыми версиями Jira API
+- Сохранена для обратной совместимости
+
 ## Установка
 
+### Для jira_export_v3.py (API v3 - рекомендуется):
+```bash
+pip install requests
+```
+
+### Для jira_export.py (устаревшая версия):
 ```bash
 pip install atlassian-python-api
 ```
@@ -27,22 +46,28 @@ export JIRA_API_TOKEN="your-api-token"
 
 ## Использование
 
+### jira_export_v3.py (API v3 - рекомендуется):
 ```bash
 # Базовое использование
-python jira_export.py PROJECT_KEY FIX_VERSION
+python jira_export_v3.py PROJECT_KEY FIX_VERSION
 
 # Пример
-python jira_export.py PROJ 1.0.0
+python jira_export_v3.py PROJ 1.0.0
 
 # С указанием имени файла
-python jira_export.py PROJ 1.0.0 my_release_notes.json
+python jira_export_v3.py PROJ 1.0.0 my_release_notes.json
+```
+
+### jira_export.py (устаревшая версия):
+```bash
+python jira_export.py PROJ 1.0.0
 ```
 
 ## Примеры
 
 ### Экспорт релиза v2.5.0 проекта DEV:
 ```bash
-python jira_export.py DEV 2.5.0
+python jira_export_v3.py DEV 2.5.0
 ```
 
 Результат будет сохранён в `release_notes_2_5_0.json`
