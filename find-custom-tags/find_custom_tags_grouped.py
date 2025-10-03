@@ -122,14 +122,23 @@ class CompactTagScanner:
         
         # Сортируем и сканируем
         prod_files.sort()
+        
+        self.total_files_scanned = len(prod_files)
+        self.files_with_custom_tags = 0
+        
         for prod_file in prod_files:
             prod_name = self.extract_prod_number(prod_file.name)
             self.extract_tags(prod_file, prod_name)
+            
+            # Подсчитываем файлы с кастомными тегами
+            if prod_name in self.results and len(self.results[prod_name]) > 0:
+                self.files_with_custom_tags += 1
     
     def print_report(self) -> None:
         """Выводит минимальный отчет с группировкой по продам."""
         if not self.results:
             print("✅ Кастомные теги не найдены")
+            print(f"\nОбработано файлов: {self.total_files_scanned}")
             return
         
         # Сортируем проды для последовательного вывода
@@ -142,6 +151,13 @@ class CompactTagScanner:
                 print(f"  tag: {tag_info['tag']}")
             
             print()
+        
+        # Статистика
+        total_tags = sum(len(tags) for tags in self.results.values())
+        print(f"Статистика:")
+        print(f"  Обработано файлов: {self.total_files_scanned}")
+        print(f"  Файлов с кастомными тегами: {self.files_with_custom_tags}")
+        print(f"  Всего найдено кастомных тегов: {total_tags}")
     
     def export_to_file(self, output_file: str, format: str = 'txt') -> None:
         """Экспортирует отчет в файл."""
@@ -162,6 +178,7 @@ class CompactTagScanner:
         """Экспорт в текстовый формат."""
         if not self.results:
             f.write("Кастомные теги не найдены\n")
+            f.write(f"\nОбработано файлов: {self.total_files_scanned}\n")
             return
         
         for prod in sorted(self.results.keys()):
@@ -173,6 +190,13 @@ class CompactTagScanner:
                 f.write(f"  tag: {tag_info['tag']}\n")
             
             f.write("\n")
+        
+        # Статистика
+        total_tags = sum(len(tags) for tags in self.results.values())
+        f.write("\nСтатистика:\n")
+        f.write(f"  Обработано файлов: {self.total_files_scanned}\n")
+        f.write(f"  Файлов с кастомными тегами: {self.files_with_custom_tags}\n")
+        f.write(f"  Всего найдено кастомных тегов: {total_tags}\n")
     
     def _export_csv(self, f) -> None:
         """Экспорт в CSV формат."""
@@ -193,7 +217,8 @@ class CompactTagScanner:
     def _export_markdown(self, f) -> None:
         """Экспорт в Markdown формат."""
         if not self.results:
-            f.write("**Кастомные теги не найдены**\n")
+            f.write("**Кастомные теги не найдены**\n\n")
+            f.write(f"Обработано файлов: {self.total_files_scanned}\n")
             return
         
         f.write("# Кастомные теги\n\n")
@@ -208,6 +233,13 @@ class CompactTagScanner:
                 f.write(f"| `{tag_info['service']}` | `{tag_info['tag']}` |\n")
             
             f.write("\n")
+        
+        # Статистика
+        total_tags = sum(len(tags) for tags in self.results.values())
+        f.write("## Статистика\n\n")
+        f.write(f"- **Обработано файлов:** {self.total_files_scanned}\n")
+        f.write(f"- **Файлов с кастомными тегами:** {self.files_with_custom_tags}\n")
+        f.write(f"- **Всего найдено кастомных тегов:** {total_tags}\n")
 
 
 def parse_arguments():
