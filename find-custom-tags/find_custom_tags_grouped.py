@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Скрипт для поиска кастомных тегов в файлах продакшнов.
+Скрипт для поиска кастомных тегов в yml файлах.
+Сканирует все .yml и .yaml файлы в указанной директории.
 Показывает только теги с префиксами (feature/, hotfix/, и т.д.)
 Игнорирует версионные теги (1.0.0) и хеши коммитов.
-Группирует результаты по продам.
+Группирует результаты по файлам.
+Исключает из статистики сервисы с суффиксом -limited.
 """
 
 import sys
@@ -20,14 +22,15 @@ class CompactTagScanner:
         self.results: Dict[str, List[Dict]] = defaultdict(list)
     
     def is_prod_file(self, filename: str) -> bool:
-        """Проверяет, является ли файл файлом продакшна."""
-        pattern = r'^prod\d+\.(yml|yaml)$'
+        """Проверяет, является ли файл yml/yaml файлом."""
+        pattern = r'^.+\.(yml|yaml)$'
         return bool(re.match(pattern, filename, re.IGNORECASE))
     
     def extract_prod_number(self, filename: str) -> str:
-        """Извлекает номер прода из имени файла."""
-        match = re.search(r'(prod\d+)', filename, re.IGNORECASE)
-        return match.group(1).lower() if match else "unknown"
+        """Извлекает имя прода из имени файла (имя файла без расширения)."""
+        # Убираем расширение .yml или .yaml
+        name_without_ext = re.sub(r'\.(yml|yaml)$', '', filename, flags=re.IGNORECASE)
+        return name_without_ext if name_without_ext else "unknown"
     
     def is_custom_tag(self, tag: str) -> bool:
         """
@@ -86,6 +89,10 @@ class CompactTagScanner:
                     if tag_match:
                         tag_value = tag_match.group(1).strip().strip('"\'')
                         
+                        # Исключаем сервисы с суффиксом -limited
+                        if current_service.endswith('-limited'):
+                            continue
+                        
                         # Проверяем, является ли тег кастомным
                         if self.is_custom_tag(tag_value):
                             self.results[prod_name].append({
@@ -110,7 +117,7 @@ class CompactTagScanner:
                      if f.is_file() and self.is_prod_file(f.name)]
         
         if not prod_files:
-            print("⚠️  Не найдено файлов продакшнов (prod*.yml)")
+            print("⚠️  Не найдено yml/yaml файлов")
             sys.exit(0)
         
         # Сортируем и сканируем
@@ -206,11 +213,11 @@ class CompactTagScanner:
 def parse_arguments():
     """Парсинг аргументов."""
     parser = argparse.ArgumentParser(
-        description='Поиск кастомных тегов (feature/, hotfix/, и т.д.) в файлах продакшнов',
+        description='Поиск кастомных тегов (feature/, hotfix/, и т.д.) во всех yml/yaml файлах',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    parser.add_argument('path', help='Путь к директории с файлами продакшнов')
+    parser.add_argument('path', help='Путь к директории с yml/yaml файлами')
     parser.add_argument('-o', '--output', help='Сохранить отчет в файл')
     parser.add_argument('-f', '--format', choices=['txt', 'csv', 'md'], 
                        default='txt', help='Формат файла (по умолчанию: txt)')
