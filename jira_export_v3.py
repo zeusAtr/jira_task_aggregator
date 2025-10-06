@@ -69,12 +69,14 @@ def get_service_group(component_name: str) -> str:
         component_name: Component/service name
     
     Returns:
-        Group name: 'GP', 'Jackpot system', or 'SPE system'
+        Group name: 'GP', 'Jackpot system', 'SPE system', or 'Replay system'
     """
     if component_name.startswith('jackpot-'):
         return 'Jackpot system'
     elif component_name.startswith('spe-'):
         return 'SPE system'
+    elif component_name.startswith('replay-'):
+        return 'Replay system'
     else:
         return 'GP'
 
@@ -126,7 +128,8 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     service_groups = {
         'GP': set(),
         'Jackpot system': set(),
-        'SPE system': set()
+        'SPE system': set(),
+        'Replay system': set()
     }
     
     for issue in issues:
