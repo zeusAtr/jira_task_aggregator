@@ -222,13 +222,6 @@ def print_summary(export_data: Dict[str, Any]):
             print(f"\n  {service_group}:")
             for component in components:
                 print(f"    - {component}")
-        print()
-    
-    # Print all components
-    if 'all_components' in export_data and export_data['all_components']:
-        print("ALL COMPONENTS:")
-        for component in export_data['all_components']:
-            print(f"  - {component}")
     
     print(f"\n{'='*60}")
 
