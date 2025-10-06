@@ -61,6 +61,24 @@ def search_issues(jira_url: str, auth: HTTPBasicAuth, jql: str, fields: list, ma
     return response.json()
 
 
+def get_service_group(component_name: str) -> str:
+    """
+    Determine service group based on component name prefix
+    
+    Args:
+        component_name: Component/service name
+    
+    Returns:
+        Group name: 'GP', 'Jackpot system', or 'SPE system'
+    """
+    if component_name.startswith('jackpot-'):
+        return 'Jackpot system'
+    elif component_name.startswith('spe-'):
+        return 'SPE system'
+    else:
+        return 'GP'
+
+
 def export_issues_by_version(project_key: str, fix_version: str, output_file: str = None) -> Dict[str, Any]:
     """
     Export Jira issues by fixVersion to JSON grouped by Release announce type
@@ -104,10 +122,22 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     all_components = set()
     ungrouped_count = 0
     
+    # Group components by service groups
+    service_groups = {
+        'GP': set(),
+        'Jackpot system': set(),
+        'SPE system': set()
+    }
+    
     for issue in issues:
         # Extract components
         components = [comp['name'] for comp in issue['fields'].get('components', [])]
         all_components.update(components)
+        
+        # Classify components by service group
+        for component in components:
+            group = get_service_group(component)
+            service_groups[group].add(component)
         
         # Get Release announce type value (customfield_11823)
         announce_type_field = issue['fields'].get('customfield_11823')
@@ -138,9 +168,17 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     if ungrouped_count > 0:
         print(f"\n⚠️  Warning: {ungrouped_count} issues without Release announce type")
     
-    # Create final export structure
+    # Create final export structure with service groups
     export_data = grouped_data.copy()
-    export_data['components'] = sorted(list(all_components))
+    
+    # Add service groups (only non-empty ones)
+    services_data = {}
+    for group_name, components in service_groups.items():
+        if components:
+            services_data[group_name] = sorted(list(components))
+    
+    export_data['services'] = services_data
+    export_data['all_components'] = sorted(list(all_components))
     
     # Set default output file name if not provided
     if not output_file:
@@ -150,7 +188,8 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(export_data, f, indent=2, ensure_ascii=False)
     
-    total_issues = sum(len(issues) for key, issues in export_data.items() if key != 'components')
+    total_issues = sum(len(issues) for key, issues in export_data.items() 
+                       if key not in ['services', 'all_components'])
     print(f"\nExported {total_issues} issues to {output_file}")
     
     return export_data
@@ -163,22 +202,32 @@ def print_summary(export_data: Dict[str, Any]):
     print(f"{'='*60}")
     
     # Count total issues
-    total_issues = sum(len(issues) for key, issues in export_data.items() if key != 'components')
+    total_issues = sum(len(issues) for key, issues in export_data.items() 
+                       if key not in ['services', 'all_components'])
     print(f"Total issues: {total_issues}\n")
     
     # Print issues by Release announce type
     for group_name, issues in export_data.items():
-        if group_name == 'components':
+        if group_name in ['services', 'all_components']:
             continue
         print(f"{group_name.upper()}:")
         for issue in issues:
             print(f"  - {issue}")
         print()
     
-    # Print components
-    if 'components' in export_data and export_data['components']:
-        print("COMPONENTS:")
-        for component in export_data['components']:
+    # Print service groups
+    if 'services' in export_data and export_data['services']:
+        print("SERVICE GROUPS:")
+        for service_group, components in export_data['services'].items():
+            print(f"\n  {service_group}:")
+            for component in components:
+                print(f"    - {component}")
+        print()
+    
+    # Print all components
+    if 'all_components' in export_data and export_data['all_components']:
+        print("ALL COMPONENTS:")
+        for component in export_data['all_components']:
             print(f"  - {component}")
     
     print(f"\n{'='*60}")

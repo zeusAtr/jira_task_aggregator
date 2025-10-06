@@ -1,15 +1,16 @@
-# Jira Release Notes Exporter (Updated)
+# Jira Release Notes Exporter v3
 
-Скрипт для экспорта задач из Jira в JSON формат по fixVersion с **группировкой по Release announce type** (customfield_11823) и списком всех компонентов.
+Скрипт для экспорта release notes из Jira с автоматической группировкой сервисов по системам.
 
-📄 **[Посмотреть пример результата (example_output.json)](./example_output.json)**
+## Основные возможности
 
-## 🎯 Особенности
-
-- ✅ Группировка по **Release announce type**
-- ✅ Использует **Jira REST API v3** (`/rest/api/3/search/jql`)
-- ✅ Работает только с библиотекой `requests`
-- ✅ Экспорт списка всех компонентов
+- ✅ Экспорт issues по fixVersion
+- ✅ Группировка по Release announce type (customfield_11823)
+- ✅ **Автоматическое разделение сервисов по группам:**
+  - **GP** - все сервисы по умолчанию
+  - **Jackpot system** - сервисы с префиксом `jackpot-*`
+  - **SPE system** - сервисы с префиксом `spe-*`
+- ✅ Полный список всех компонентов
 
 ## Установка
 
@@ -17,160 +18,166 @@
 pip install requests
 ```
 
-## Настройка
+## Настройка environment variables
 
-Установите переменные окружения:
-
-### Linux / macOS:
 ```bash
-export JIRA_URL=".."
+export JIRA_URL="https://your-domain.atlassian.net"
 export JIRA_USERNAME="your-email@example.com"
 export JIRA_API_TOKEN="your-api-token"
 ```
-
-### Windows (PowerShell):
-```powershell
-$env:JIRA_URL="url"
-$env:JIRA_USERNAME="your-email@example.com"
-$env:JIRA_API_TOKEN="your-api-token"
-```
-
-### Как получить API токен:
-1. Зайдите в https://id.atlassian.com/manage-profile/security/api-tokens
-2. Нажмите **"Create API token"**
-3. Скопируйте токен
 
 ## Использование
 
 ```bash
 # Базовое использование
-python jira_export_v3_fixed.py PROJECT_KEY FIX_VERSION
+python jira_export_v3.py PROJECT_KEY FIX_VERSION
 
-# Пример
-python jira_export_v3_fixed.py PP 43.68.5
+# С указанием имени выходного файла
+python jira_export_v3.py PROJECT_KEY FIX_VERSION output.json
 
-# С указанием имени файла
-python jira_export_v3_fixed.py PP 43.68.5 my_release_notes.json
+# Примеры
+python jira_export_v3.py PROJ 1.0.0
+python jira_export_v3.py LIONS "2024.10.15" release_notes_oct.json
 ```
 
-## Примеры
+## Структура выходного файла
 
-### Экспорт релиза 43.68.5 проекта PP:
-```bash
-python jira_export_v3_fixed.py PP 43.68.5
-```
-
-Результат будет сохранён в `release_notes_43_68_5.json`
-
-### Пример вывода скрипта в консоли:
-```
-Searching for issues with JQL: project = PP AND fixVersion = "43.68.5" ORDER BY key ASC
-Using API endpoint: ..
-Found 12 issues (Total: 12)
-
-Exported 12 issues to release_notes_43_68_5.json
-
-============================================================
-RELEASE NOTES SUMMARY (Grouped by Release announce type)
-============================================================
-Total issues: 12
-
-NEW FEATURE:
-  - PP-123 - Добавить новую функцию авторизации через OAuth2
-  - PP-126 - Добавить темную тему в интерфейс
-  - PP-127 - Настроить CI/CD pipeline для автоматического деплоя
-
-BUG FIX:
-  - PP-124 - Исправить баг с отображением списка пользователей
-  - PP-130 - Исправить проблему с кэшированием
-
-IMPROVEMENT:
-  - PP-125 - Оптимизировать запросы к базе данных
-  - PP-128 - Добавить unit тесты для модуля аутентификации
-
-DOCUMENTATION:
-  - PP-129 - Обновить документацию API
-
-COMPONENTS:
-  - Backend
-  - Database
-  - DevOps
-  - Documentation
-  - Frontend
-  - Security
-  - Testing
-  - UI/UX
-
-============================================================
-```
-
-### Формат вывода JSON (release_notes_43_68_5.json):
 ```json
 {
   "New Feature": [
-    "PP-123 - Добавить новую функцию авторизации через OAuth2",
-    "PP-126 - Добавить темную тему в интерфейс",
-    "PP-127 - Настроить CI/CD pipeline для автоматического деплоя"
+    "PROJ-123 - Add new authentication flow",
+    "PROJ-124 - Implement jackpot bonus system"
   ],
   "Bug Fix": [
-    "PP-124 - Исправить баг с отображением списка пользователей",
-    "PP-130 - Исправить проблему с кэшированием"
+    "PROJ-125 - Fix SPE calculation error"
   ],
-  "Improvement": [
-    "PP-125 - Оптимизировать запросы к базе данных",
-    "PP-128 - Добавить unit тесты для модуля аутентификации"
-  ],
-  "Documentation": [
-    "PP-129 - Обновить документацию API"
-  ],
-  "components": [
-    "Backend",
-    "Database",
-    "DevOps",
-    "Documentation",
-    "Frontend",
-    "Security",
-    "Testing",
-    "UI/UX"
+  "services": {
+    "GP": [
+      "api-gateway",
+      "auth-service",
+      "user-service"
+    ],
+    "Jackpot system": [
+      "jackpot-api",
+      "jackpot-calculator"
+    ],
+    "SPE system": [
+      "spe-calculator",
+      "spe-processor"
+    ]
+  },
+  "all_components": [
+    "api-gateway",
+    "auth-service",
+    "jackpot-api",
+    "jackpot-calculator",
+    "spe-calculator",
+    "spe-processor",
+    "user-service"
   ]
 }
 ```
 
-## 📋 Группировка
+## Логика группировки сервисов
 
-Задачи группируются по значению поля **Release announce type** (customfield_11823):
-- Каждое значение поля становится отдельной группой
-- Если у задачи нет значения в этом поле, она попадает в группу "No announce type"
-- Компоненты собираются из всех задач и выводятся отдельным списком
+Скрипт автоматически анализирует имена компонентов и группирует их:
 
-## 🔧 Дополнительные скрипты
+- **jackpot-api**, **jackpot-calculator** → Jackpot system
+- **spe-calculator**, **spe-processor** → SPE system
+- **api-gateway**, **user-service** → GP (по умолчанию)
 
-### test_jql_queries.py  
-Тестирует разные варианты JQL запросов:
-```bash
-python test_jql_queries.py
+## Пример вывода в консоли
+
+```
+Searching for issues with JQL: project = PROJ AND fixVersion = "1.0.0" ORDER BY key ASC
+Using API endpoint: https://your-domain.atlassian.net/rest/api/3/search/jql
+Found 15 issues (Total: 15)
+
+Exported 15 issues to release_notes_1_0_0.json
+
+============================================================
+RELEASE NOTES SUMMARY (Grouped by Release announce type)
+============================================================
+Total issues: 15
+
+NEW FEATURE:
+  - PROJ-123 - Add new authentication flow
+  - PROJ-124 - Implement jackpot bonus system
+
+BUG FIX:
+  - PROJ-125 - Fix SPE calculation error
+  - PROJ-126 - Resolve payment gateway timeout
+
+SERVICE GROUPS:
+
+  GP:
+    - api-gateway
+    - auth-service
+    - user-service
+
+  Jackpot system:
+    - jackpot-api
+    - jackpot-calculator
+
+  SPE system:
+    - spe-calculator
+    - spe-processor
+
+ALL COMPONENTS:
+  - api-gateway
+  - auth-service
+  - jackpot-api
+  - jackpot-calculator
+  - spe-calculator
+  - spe-processor
+  - user-service
+
+============================================================
 ```
 
-### jira_debug_full.py
-Полная диагностика подключения и поиска:
-```bash
-python jira_debug_full.py
+## Добавление новых групп сервисов
+
+Чтобы добавить новую группу, отредактируйте функцию `get_service_group()`:
+
+```python
+def get_service_group(component_name: str) -> str:
+    if component_name.startswith('jackpot-'):
+        return 'Jackpot system'
+    elif component_name.startswith('spe-'):
+        return 'SPE system'
+    elif component_name.startswith('new-prefix-'):  # Новая группа
+        return 'New System'
+    else:
+        return 'GP'
+```
+
+И добавьте новую группу в словарь `service_groups`:
+
+```python
+service_groups = {
+    'GP': set(),
+    'Jackpot system': set(),
+    'SPE system': set(),
+    'New System': set()  # Новая группа
+}
 ```
 
 ## Troubleshooting
 
-**Ошибка "Missing environment variables":**
-- Проверьте, что все переменные окружения установлены
+### Ошибка "Missing environment variables"
+Проверьте, что все три переменные окружения установлены:
+```bash
+echo $JIRA_URL
+echo $JIRA_USERNAME
+echo $JIRA_API_TOKEN
+```
 
-**Ошибка "No issues found":**
-- Проверьте правильность названия версии
-- Убедитесь, что версия назначена как Fix Version в задачах
-- Попробуйте test_jql_queries.py для диагностики
+### HTTP Error 401
+Проверьте правильность API token. Создать новый можно здесь:
+https://id.atlassian.com/manage-profile/security/api-tokens
 
-**Ошибка авторизации:**
-- Проверьте правильность API токена
-- Убедитесь, что используете email в JIRA_USERNAME
-
-**Задачи без Release announce type:**
-- Проверьте, что поле заполнено в задачах
-- Такие задачи попадут в группу "No announce type"
+### Пустой список issues
+Проверьте:
+- Существует ли указанный fixVersion в проекте
+- Есть ли у вас права на просмотр issues в проекте
+- Правильно ли указан PROJECT_KEY (должен быть в uppercase)
