@@ -18,6 +18,7 @@ class JVMOptsScanner:
         self.service_filter = service_filter
         self.results: Dict[str, Dict] = {}  # {file: {service: opts}}
         self.all_opts: Set[str] = set()
+        self.all_services: Dict[str, Set[str]] = defaultdict(set)  # {file: {services}}
         
     def is_yml_file(self, filename: str) -> bool:
         """Проверяет, является ли файл yml/yaml файлом."""
@@ -41,6 +42,7 @@ class JVMOptsScanner:
         Поддерживает форматы:
         - jvm_run_opts: "-Xmx2g -XX:+UseG1GC"
         - jvm_run_opts: -Xmx2g -XX:+UseG1GC
+        - jvm_run_opts: 123
         """
         # Убираем jvm_run_opts: и кавычки
         opts_str = re.sub(r'^\s*jvm_run_opts\s*:\s*', '', line)
@@ -77,6 +79,7 @@ class JVMOptsScanner:
     def extract_jvm_opts(self, file_path: Path, file_name: str) -> None:
         """Извлекает jvm_run_opts из сервисов в файле."""
         current_service = None
+        current_indent = -1
         matches_filter = False
         
         try:
@@ -84,45 +87,72 @@ class JVMOptsScanner:
                 lines = f.readlines()
                 
                 for line_num, line in enumerate(lines, 1):
-                    # Ищем определение сервиса
+                    # Пропускаем пустые строки и комментарии
+                    if not line.strip() or line.strip().startswith('#'):
+                        continue
+                    
+                    # Определяем уровень отступа
+                    line_indent = len(line) - len(line.lstrip())
+                    
+                    # Ищем определение сервиса (формат: name: value)
                     service_match = re.search(r'^\s*-?\s*name:\s*["\']?([a-zA-Z0-9_-]+)["\']?\s*$', line)
                     if service_match:
                         current_service = service_match.group(1).strip()
+                        current_indent = line_indent
+                        self.all_services[file_name].add(current_service)
                         matches_filter = self.matches_service_filter(current_service)
                         continue
                     
-                    # Альтернативный формат сервиса
+                    # Ищем ключ сервиса (формат: service_name:)
                     service_key_match = re.search(r'^(\s*)([a-zA-Z0-9_-]+):\s*$', line)
                     if service_key_match:
                         indent = len(service_key_match.group(1))
                         potential_service = service_key_match.group(2).strip()
-                        excluded_words = ['services', 'volumes', 'networks', 'configs', 'secrets', 
-                                        'environment', 'labels', 'ports', 'image', 'deploy', 
-                                        'version', 'build', 'depends_on', 'restart', 'command',
-                                        'entrypoint', 'healthcheck', 'logging']
-                        if potential_service not in excluded_words and indent <= 4:
-                            current_service = potential_service
-                            matches_filter = self.matches_service_filter(current_service)
+                        
+                        # Список служебных ключей YAML, которые не являются сервисами
+                        excluded_words = [
+                            'services', 'volumes', 'networks', 'configs', 'secrets', 
+                            'environment', 'labels', 'ports', 'image', 'deploy', 
+                            'version', 'build', 'depends_on', 'restart', 'command',
+                            'entrypoint', 'healthcheck', 'logging', 'links', 'volumes_from',
+                            'expose', 'dns', 'dns_search', 'tmpfs', 'external_links',
+                            'extra_hosts', 'security_opt', 'stop_signal', 'sysctls',
+                            'ulimits', 'userns_mode', 'cpu_shares', 'cpu_quota',
+                            'cpuset', 'domainname', 'hostname', 'ipc', 'mac_address',
+                            'mem_limit', 'memswap_limit', 'privileged', 'read_only',
+                            'shm_size', 'stdin_open', 'tty', 'user', 'working_dir'
+                        ]
+                        
+                        # Если это не служебное слово, считаем его сервисом
+                        if potential_service not in excluded_words:
+                            # Если отступ меньше или равен текущему, это новый сервис на том же или выше уровне
+                            if current_service is None or indent <= current_indent:
+                                current_service = potential_service
+                                current_indent = indent
+                                self.all_services[file_name].add(current_service)
+                                matches_filter = self.matches_service_filter(current_service)
                         continue
                     
                     # Ищем jvm_run_opts только для подходящих сервисов
                     if matches_filter and current_service:
                         jvm_match = re.search(r'^\s*jvm_run_opts\s*:\s*(.+?)\s*$', line)
                         if jvm_match:
-                            opts = self.parse_jvm_opts_line(line)
-                            
-                            if opts:
-                                # Сохраняем результаты
-                                if file_name not in self.results:
-                                    self.results[file_name] = {}
+                            # Проверяем, что это не новый блок (должен быть больший отступ)
+                            if line_indent > current_indent:
+                                opts = self.parse_jvm_opts_line(line)
                                 
-                                if current_service not in self.results[file_name]:
-                                    self.results[file_name][current_service] = []
-                                
-                                self.results[file_name][current_service].extend(opts)
-                                
-                                # Добавляем в общий набор
-                                self.all_opts.update(opts)
+                                if opts:
+                                    # Сохраняем результаты
+                                    if file_name not in self.results:
+                                        self.results[file_name] = {}
+                                    
+                                    if current_service not in self.results[file_name]:
+                                        self.results[file_name][current_service] = []
+                                    
+                                    self.results[file_name][current_service].extend(opts)
+                                    
+                                    # Добавляем в общий набор
+                                    self.all_opts.update(opts)
                             
         except Exception as e:
             print(f"⚠️  Ошибка при чтении {file_path}: {e}", file=sys.stderr)
@@ -157,6 +187,29 @@ class JVMOptsScanner:
             
             if file_name in self.results:
                 self.files_with_services += 1
+    
+    def print_all_services(self) -> None:
+        """Выводит список всех найденных сервисов."""
+        if not self.all_services:
+            print("❌ Сервисы не найдены")
+            return
+        
+        print("=" * 80)
+        print("📋 Все найденные сервисы")
+        print("=" * 80)
+        print()
+        
+        for file_name in sorted(self.all_services.keys()):
+            services = sorted(self.all_services[file_name])
+            if services:
+                print(f"Файл: {file_name}")
+                for service in services:
+                    print(f"  - {service}")
+                print()
+        
+        total_services = sum(len(services) for services in self.all_services.values())
+        print(f"Всего уникальных сервисов: {total_services}")
+        print("=" * 80)
     
     def print_report(self) -> None:
         """Выводит отчет о найденных JVM опциях."""
@@ -334,20 +387,23 @@ def parse_arguments():
         epilog="""
 Примеры использования:
   %(prog)s /path/to/configs -s gs2c              # Искать только gs2c сервисы
-  %(prog)s /path/to/configs -s backend           # Искать backend сервисы
+  %(prog)s /path/to/configs -s operator_api      # Искать operator_api сервисы
   %(prog)s /path/to/configs                      # Искать во всех сервисах
   %(prog)s /path/to/configs -s api -o report.txt # Сохранить в файл
+  %(prog)s /path/to/configs --list-services      # Показать все найденные сервисы
         """
     )
     
     parser.add_argument('path', help='Путь к директории с yml/yaml файлами')
     parser.add_argument('-s', '--service', dest='service_filter',
-                       help='Фильтр по имени сервиса (поиск по вхождению, например: gs2c, api, backend)')
+                       help='Фильтр по имени сервиса (поиск по вхождению, например: gs2c, api, operator_api)')
     parser.add_argument('-o', '--output', help='Сохранить отчет в файл')
     parser.add_argument('-f', '--format', choices=['txt', 'csv', 'md'], 
                        default='txt', help='Формат файла (по умолчанию: txt)')
     parser.add_argument('-q', '--quiet', action='store_true', 
                        help='Не выводить на экран (только в файл)')
+    parser.add_argument('--list-services', action='store_true',
+                       help='Показать список всех найденных сервисов')
     
     return parser.parse_args()
 
@@ -357,6 +413,10 @@ def main():
     
     scanner = JVMOptsScanner(args.path, args.service_filter)
     scanner.scan_directory()
+    
+    if args.list_services:
+        scanner.print_all_services()
+        return
     
     if not args.quiet:
         scanner.print_report()
