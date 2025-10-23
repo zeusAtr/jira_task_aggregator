@@ -42,7 +42,6 @@ class JVMOptsScanner:
         Поддерживает форматы:
         - jvm_run_opts: "-Xmx2g -XX:+UseG1GC"
         - jvm_run_opts: -Xmx2g -XX:+UseG1GC
-        - jvm_run_opts: 123
         """
         # Убираем jvm_run_opts: и кавычки
         opts_str = re.sub(r'^\s*jvm_run_opts\s*:\s*', '', line)
@@ -79,7 +78,9 @@ class JVMOptsScanner:
     def extract_jvm_opts(self, file_path: Path, file_name: str) -> None:
         """Извлекает jvm_run_opts из сервисов в файле."""
         current_service = None
-        current_indent = -1
+        in_services_block = False
+        services_indent = -1
+        current_service_indent = -1
         matches_filter = False
         
         try:
@@ -94,65 +95,69 @@ class JVMOptsScanner:
                     # Определяем уровень отступа
                     line_indent = len(line) - len(line.lstrip())
                     
-                    # Ищем определение сервиса (формат: name: value)
-                    service_match = re.search(r'^\s*-?\s*name:\s*["\']?([a-zA-Z0-9_-]+)["\']?\s*$', line)
-                    if service_match:
-                        current_service = service_match.group(1).strip()
-                        current_indent = line_indent
-                        self.all_services[file_name].add(current_service)
-                        matches_filter = self.matches_service_filter(current_service)
+                    # Ищем блок services:
+                    if re.match(r'^services:\s*$', line.strip()):
+                        in_services_block = True
+                        services_indent = line_indent
+                        current_service = None
                         continue
                     
-                    # Ищем ключ сервиса (формат: service_name:)
-                    service_key_match = re.search(r'^(\s*)([a-zA-Z0-9_-]+):\s*$', line)
-                    if service_key_match:
-                        indent = len(service_key_match.group(1))
-                        potential_service = service_key_match.group(2).strip()
+                    # Если мы в блоке services
+                    if in_services_block:
+                        # Проверяем, не вышли ли мы из блока services
+                        if line_indent <= services_indent and line.strip().endswith(':'):
+                            # Это новый блок на том же уровне, что и services
+                            if not line.strip().startswith('-'):
+                                in_services_block = False
+                                current_service = None
+                                continue
                         
-                        # Список служебных ключей YAML, которые не являются сервисами
-                        excluded_words = [
-                            'services', 'volumes', 'networks', 'configs', 'secrets', 
-                            'environment', 'labels', 'ports', 'image', 'deploy', 
-                            'version', 'build', 'depends_on', 'restart', 'command',
-                            'entrypoint', 'healthcheck', 'logging', 'links', 'volumes_from',
-                            'expose', 'dns', 'dns_search', 'tmpfs', 'external_links',
-                            'extra_hosts', 'security_opt', 'stop_signal', 'sysctls',
-                            'ulimits', 'userns_mode', 'cpu_shares', 'cpu_quota',
-                            'cpuset', 'domainname', 'hostname', 'ipc', 'mac_address',
-                            'mem_limit', 'memswap_limit', 'privileged', 'read_only',
-                            'shm_size', 'stdin_open', 'tty', 'user', 'working_dir'
-                        ]
+                        # Ищем определение сервиса внутри блока services
+                        # Формат: service_name: или - service_name:
+                        service_match = re.match(r'^(\s*)(-\s*)?([a-zA-Z0-9_-]+):\s*$', line)
+                        if service_match:
+                            indent = len(service_match.group(1))
+                            service_name = service_match.group(3)
+                            
+                            # Проверяем, что это сервис (на один уровень глубже services)
+                            if indent > services_indent:
+                                # Если это на том же уровне, что предыдущий сервис, или глубже services
+                                if current_service is None or indent <= current_service_indent:
+                                    current_service = service_name
+                                    current_service_indent = indent
+                                    self.all_services[file_name].add(current_service)
+                                    matches_filter = self.matches_service_filter(current_service)
+                            continue
                         
-                        # Если это не служебное слово, считаем его сервисом
-                        if potential_service not in excluded_words:
-                            # Если отступ меньше или равен текущему, это новый сервис на том же или выше уровне
-                            if current_service is None or indent <= current_indent:
-                                current_service = potential_service
-                                current_indent = indent
-                                self.all_services[file_name].add(current_service)
-                                matches_filter = self.matches_service_filter(current_service)
-                        continue
-                    
-                    # Ищем jvm_run_opts только для подходящих сервисов
-                    if matches_filter and current_service:
-                        jvm_match = re.search(r'^\s*jvm_run_opts\s*:\s*(.+?)\s*$', line)
-                        if jvm_match:
-                            # Проверяем, что это не новый блок (должен быть больший отступ)
-                            if line_indent > current_indent:
-                                opts = self.parse_jvm_opts_line(line)
-                                
-                                if opts:
-                                    # Сохраняем результаты
-                                    if file_name not in self.results:
-                                        self.results[file_name] = {}
+                        # Альтернативный формат: name: service_name внутри блока сервиса
+                        name_match = re.match(r'^\s*name:\s*["\']?([a-zA-Z0-9_-]+)["\']?\s*$', line)
+                        if name_match and current_service:
+                            # Обновляем имя сервиса, если оно задано через name:
+                            service_name_from_field = name_match.group(1)
+                            # Можно использовать это имя вместо ключа
+                            # Но для сохранения совместимости, оставим ключ как основное имя
+                            pass
+                        
+                        # Ищем jvm_run_opts только для подходящих сервисов
+                        if matches_filter and current_service:
+                            jvm_match = re.search(r'^\s*jvm_run_opts\s*:\s*(.+?)\s*$', line)
+                            if jvm_match:
+                                # Проверяем, что это внутри текущего сервиса
+                                if line_indent > current_service_indent:
+                                    opts = self.parse_jvm_opts_line(line)
                                     
-                                    if current_service not in self.results[file_name]:
-                                        self.results[file_name][current_service] = []
-                                    
-                                    self.results[file_name][current_service].extend(opts)
-                                    
-                                    # Добавляем в общий набор
-                                    self.all_opts.update(opts)
+                                    if opts:
+                                        # Сохраняем результаты
+                                        if file_name not in self.results:
+                                            self.results[file_name] = {}
+                                        
+                                        if current_service not in self.results[file_name]:
+                                            self.results[file_name][current_service] = []
+                                        
+                                        self.results[file_name][current_service].extend(opts)
+                                        
+                                        # Добавляем в общий набор
+                                        self.all_opts.update(opts)
                             
         except Exception as e:
             print(f"⚠️  Ошибка при чтении {file_path}: {e}", file=sys.stderr)
@@ -208,7 +213,7 @@ class JVMOptsScanner:
                 print()
         
         total_services = sum(len(services) for services in self.all_services.values())
-        print(f"Всего уникальных сервисов: {total_services}")
+        print(f"Всего найдено сервисов: {total_services}")
         print("=" * 80)
     
     def print_report(self) -> None:
@@ -255,7 +260,7 @@ class JVMOptsScanner:
         print("=" * 80)
         print(f"  Обработано файлов: {self.total_files_scanned}")
         print(f"  Файлов с найденными сервисами: {self.files_with_services}")
-        print(f"  Найдено сервисов: {total_services}")
+        print(f"  Найдено сервисов с JVM опциями: {total_services}")
         print(f"  Уникальных JVM опций: {len(self.all_opts)}")
         if self.service_filter:
             print(f"  Фильтр сервисов: '{self.service_filter}'")
@@ -317,7 +322,7 @@ class JVMOptsScanner:
         f.write("=" * 80 + "\n")
         f.write(f"  Обработано файлов: {self.total_files_scanned}\n")
         f.write(f"  Файлов с найденными сервисами: {self.files_with_services}\n")
-        f.write(f"  Найдено сервисов: {total_services}\n")
+        f.write(f"  Найдено сервисов с JVM опциями: {total_services}\n")
         f.write(f"  Уникальных JVM опций: {len(self.all_opts)}\n")
         if self.service_filter:
             f.write(f"  Фильтр сервисов: '{self.service_filter}'\n")
@@ -373,7 +378,7 @@ class JVMOptsScanner:
         f.write("## Статистика\n\n")
         f.write(f"- **Обработано файлов:** {self.total_files_scanned}\n")
         f.write(f"- **Файлов с найденными сервисами:** {self.files_with_services}\n")
-        f.write(f"- **Найдено сервисов:** {total_services}\n")
+        f.write(f"- **Найдено сервисов с JVM опциями:** {total_services}\n")
         f.write(f"- **Уникальных JVM опций:** {len(self.all_opts)}\n")
         if self.service_filter:
             f.write(f"- **Фильтр сервисов:** `{self.service_filter}`\n")
@@ -386,8 +391,8 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Примеры использования:
-  %(prog)s /path/to/configs -s gs2c              # Искать только gs2c сервисы
-  %(prog)s /path/to/configs -s operator_api      # Искать operator_api сервисы
+  %(prog)s /path/to/configs -s admin             # Искать только admin сервисы
+  %(prog)s /path/to/configs -s announcing        # Искать announcing сервисы
   %(prog)s /path/to/configs                      # Искать во всех сервисах
   %(prog)s /path/to/configs -s api -o report.txt # Сохранить в файл
   %(prog)s /path/to/configs --list-services      # Показать все найденные сервисы
@@ -396,7 +401,7 @@ def parse_arguments():
     
     parser.add_argument('path', help='Путь к директории с yml/yaml файлами')
     parser.add_argument('-s', '--service', dest='service_filter',
-                       help='Фильтр по имени сервиса (поиск по вхождению, например: gs2c, api, operator_api)')
+                       help='Фильтр по имени сервиса (поиск по вхождению, например: admin, announcing)')
     parser.add_argument('-o', '--output', help='Сохранить отчет в файл')
     parser.add_argument('-f', '--format', choices=['txt', 'csv', 'md'], 
                        default='txt', help='Формат файла (по умолчанию: txt)')
