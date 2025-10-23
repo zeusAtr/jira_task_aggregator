@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Скрипт для анализа jvm_run_opts из gs2c сервисов во всех yml файлах.
+Скрипт для анализа jvm_run_opts из указанных сервисов во всех yml файлах.
 Находит все JVM опции, группирует их и показывает уникальные значения.
 """
 
@@ -13,8 +13,9 @@ from collections import defaultdict
 
 
 class JVMOptsScanner:
-    def __init__(self, search_path: str):
+    def __init__(self, search_path: str, service_filter: str = None):
         self.search_path = Path(search_path)
+        self.service_filter = service_filter
         self.results: Dict[str, Dict] = {}  # {file: {service: opts}}
         self.all_opts: Set[str] = set()
         
@@ -28,9 +29,11 @@ class JVMOptsScanner:
         name_without_ext = re.sub(r'\.(yml|yaml)$', '', filename, flags=re.IGNORECASE)
         return name_without_ext if name_without_ext else "unknown"
     
-    def is_gs2c_service(self, service_name: str) -> bool:
-        """Проверяет, является ли сервис gs2c сервисом."""
-        return 'gs2c' in service_name.lower()
+    def matches_service_filter(self, service_name: str) -> bool:
+        """Проверяет, соответствует ли сервис фильтру."""
+        if not self.service_filter:
+            return True  # Если фильтр не задан, берём все сервисы
+        return self.service_filter.lower() in service_name.lower()
     
     def parse_jvm_opts_line(self, line: str) -> List[str]:
         """
@@ -72,9 +75,9 @@ class JVMOptsScanner:
         return [opt.strip('"\'') for opt in opts if opt]
     
     def extract_jvm_opts(self, file_path: Path, file_name: str) -> None:
-        """Извлекает jvm_run_opts из gs2c сервисов в файле."""
+        """Извлекает jvm_run_opts из сервисов в файле."""
         current_service = None
-        is_gs2c = False
+        matches_filter = False
         
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -85,7 +88,7 @@ class JVMOptsScanner:
                     service_match = re.search(r'^\s*-?\s*name:\s*["\']?([a-zA-Z0-9_-]+)["\']?\s*$', line)
                     if service_match:
                         current_service = service_match.group(1).strip()
-                        is_gs2c = self.is_gs2c_service(current_service)
+                        matches_filter = self.matches_service_filter(current_service)
                         continue
                     
                     # Альтернативный формат сервиса
@@ -99,11 +102,11 @@ class JVMOptsScanner:
                                         'entrypoint', 'healthcheck', 'logging']
                         if potential_service not in excluded_words and indent <= 4:
                             current_service = potential_service
-                            is_gs2c = self.is_gs2c_service(current_service)
+                            matches_filter = self.matches_service_filter(current_service)
                         continue
                     
-                    # Ищем jvm_run_opts только для gs2c сервисов
-                    if is_gs2c and current_service:
+                    # Ищем jvm_run_opts только для подходящих сервисов
+                    if matches_filter and current_service:
                         jvm_match = re.search(r'^\s*jvm_run_opts\s*:\s*(.+?)\s*$', line)
                         if jvm_match:
                             opts = self.parse_jvm_opts_line(line)
@@ -146,24 +149,26 @@ class JVMOptsScanner:
         yml_files.sort()
         
         self.total_files_scanned = len(yml_files)
-        self.files_with_gs2c = 0
+        self.files_with_services = 0
         
         for yml_file in yml_files:
             file_name = self.extract_file_name(yml_file.name)
             self.extract_jvm_opts(yml_file, file_name)
             
             if file_name in self.results:
-                self.files_with_gs2c += 1
+                self.files_with_services += 1
     
     def print_report(self) -> None:
         """Выводит отчет о найденных JVM опциях."""
+        filter_text = f" (фильтр: '{self.service_filter}')" if self.service_filter else ""
+        
         if not self.results:
-            print("✅ JVM опции в gs2c сервисах не найдены")
+            print(f"✅ JVM опции в сервисах{filter_text} не найдены")
             print(f"\nОбработано файлов: {self.total_files_scanned}")
             return
         
         print("=" * 80)
-        print("📋 JVM_RUN_OPTS в GS2C сервисах")
+        print(f"📋 JVM_RUN_OPTS в сервисах{filter_text}")
         print("=" * 80)
         print()
         
@@ -196,9 +201,11 @@ class JVMOptsScanner:
         print("📈 Статистика")
         print("=" * 80)
         print(f"  Обработано файлов: {self.total_files_scanned}")
-        print(f"  Файлов с gs2c сервисами: {self.files_with_gs2c}")
-        print(f"  Найдено gs2c сервисов: {total_services}")
+        print(f"  Файлов с найденными сервисами: {self.files_with_services}")
+        print(f"  Найдено сервисов: {total_services}")
         print(f"  Уникальных JVM опций: {len(self.all_opts)}")
+        if self.service_filter:
+            print(f"  Фильтр сервисов: '{self.service_filter}'")
         print("=" * 80)
     
     def export_to_file(self, output_file: str, format: str = 'txt') -> None:
@@ -218,13 +225,15 @@ class JVMOptsScanner:
     
     def _export_txt(self, f) -> None:
         """Экспорт в текстовый формат."""
+        filter_text = f" (фильтр: '{self.service_filter}')" if self.service_filter else ""
+        
         if not self.results:
-            f.write("JVM опции в gs2c сервисах не найдены\n")
+            f.write(f"JVM опции в сервисах{filter_text} не найдены\n")
             f.write(f"\nОбработано файлов: {self.total_files_scanned}\n")
             return
         
         f.write("=" * 80 + "\n")
-        f.write("JVM_RUN_OPTS в GS2C сервисах\n")
+        f.write(f"JVM_RUN_OPTS в сервисах{filter_text}\n")
         f.write("=" * 80 + "\n\n")
         
         # Детальный вывод
@@ -254,9 +263,11 @@ class JVMOptsScanner:
         f.write("Статистика\n")
         f.write("=" * 80 + "\n")
         f.write(f"  Обработано файлов: {self.total_files_scanned}\n")
-        f.write(f"  Файлов с gs2c сервисами: {self.files_with_gs2c}\n")
-        f.write(f"  Найдено gs2c сервисов: {total_services}\n")
+        f.write(f"  Файлов с найденными сервисами: {self.files_with_services}\n")
+        f.write(f"  Найдено сервисов: {total_services}\n")
         f.write(f"  Уникальных JVM опций: {len(self.all_opts)}\n")
+        if self.service_filter:
+            f.write(f"  Фильтр сервисов: '{self.service_filter}'\n")
     
     def _export_csv(self, f) -> None:
         """Экспорт в CSV формат."""
@@ -275,12 +286,14 @@ class JVMOptsScanner:
     
     def _export_markdown(self, f) -> None:
         """Экспорт в Markdown формат."""
+        filter_text = f" (фильтр: `{self.service_filter}`)" if self.service_filter else ""
+        
         if not self.results:
-            f.write("**JVM опции в gs2c сервисах не найдены**\n\n")
+            f.write(f"**JVM опции в сервисах{filter_text} не найдены**\n\n")
             f.write(f"Обработано файлов: {self.total_files_scanned}\n")
             return
         
-        f.write("# JVM_RUN_OPTS в GS2C сервисах\n\n")
+        f.write(f"# JVM_RUN_OPTS в сервисах{filter_text}\n\n")
         
         # Детальный вывод
         for file_name in sorted(self.results.keys()):
@@ -306,19 +319,30 @@ class JVMOptsScanner:
         total_services = sum(len(services) for services in self.results.values())
         f.write("## Статистика\n\n")
         f.write(f"- **Обработано файлов:** {self.total_files_scanned}\n")
-        f.write(f"- **Файлов с gs2c сервисами:** {self.files_with_gs2c}\n")
-        f.write(f"- **Найдено gs2c сервисов:** {total_services}\n")
+        f.write(f"- **Файлов с найденными сервисами:** {self.files_with_services}\n")
+        f.write(f"- **Найдено сервисов:** {total_services}\n")
         f.write(f"- **Уникальных JVM опций:** {len(self.all_opts)}\n")
+        if self.service_filter:
+            f.write(f"- **Фильтр сервисов:** `{self.service_filter}`\n")
 
 
 def parse_arguments():
     """Парсинг аргументов."""
     parser = argparse.ArgumentParser(
-        description='Анализ jvm_run_opts из gs2c сервисов во всех yml/yaml файлах',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description='Анализ jvm_run_opts из указанных сервисов во всех yml/yaml файлах',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Примеры использования:
+  %(prog)s /path/to/configs -s gs2c              # Искать только gs2c сервисы
+  %(prog)s /path/to/configs -s backend           # Искать backend сервисы
+  %(prog)s /path/to/configs                      # Искать во всех сервисах
+  %(prog)s /path/to/configs -s api -o report.txt # Сохранить в файл
+        """
     )
     
     parser.add_argument('path', help='Путь к директории с yml/yaml файлами')
+    parser.add_argument('-s', '--service', dest='service_filter',
+                       help='Фильтр по имени сервиса (поиск по вхождению, например: gs2c, api, backend)')
     parser.add_argument('-o', '--output', help='Сохранить отчет в файл')
     parser.add_argument('-f', '--format', choices=['txt', 'csv', 'md'], 
                        default='txt', help='Формат файла (по умолчанию: txt)')
@@ -331,7 +355,7 @@ def parse_arguments():
 def main():
     args = parse_arguments()
     
-    scanner = JVMOptsScanner(args.path)
+    scanner = JVMOptsScanner(args.path, args.service_filter)
     scanner.scan_directory()
     
     if not args.quiet:
