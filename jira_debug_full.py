@@ -91,10 +91,21 @@ def get_project_versions(jira_url: str, auth: HTTPBasicAuth, project_key: str):
     """Get all versions for a project"""
     url = f"{jira_url}/rest/api/3/project/{project_key}/versions"
     headers = {"Accept": "application/json"}
-    
+
     response = requests.get(url, headers=headers, auth=auth)
-    
+
     return response
+
+
+def get_all_fields(jira_url: str, auth: HTTPBasicAuth):
+    """Get all available fields in Jira"""
+    url = f"{jira_url}/rest/api/3/field"
+    headers = {"Accept": "application/json"}
+
+    response = requests.get(url, headers=headers, auth=auth)
+    response.raise_for_status()
+
+    return response.json()
 
 
 def main():
@@ -143,7 +154,69 @@ def main():
     except Exception as e:
         print(f"   ❌ Error: {e}")
         sys.exit(1)
-    
+
+    # Step 2.5: List all fields
+    print("\n2.5️⃣ Fetching all available fields...")
+    try:
+        fields = get_all_fields(jira_url, auth)
+        print(f"   ✅ Found {len(fields)} fields\n")
+
+        # Categorize fields
+        system_fields = []
+        custom_fields = []
+
+        for field in fields:
+            if field.get('custom', False):
+                custom_fields.append(field)
+            else:
+                system_fields.append(field)
+
+        print(f"   📊 System fields: {len(system_fields)}")
+        print(f"   🔧 Custom fields: {len(custom_fields)}\n")
+
+        # Show system fields
+        print(f"   {'FIELD ID':<30} {'NAME':<40} {'TYPE':<20}")
+        print(f"   {'-'*30} {'-'*40} {'-'*20}")
+
+        for field in sorted(system_fields, key=lambda x: x.get('name', ''))[:20]:
+            field_id = field.get('id', 'N/A')
+            field_name = field.get('name', 'N/A')
+            field_type = field.get('schema', {}).get('type', 'N/A')
+
+            if len(field_name) > 37:
+                field_name = field_name[:37] + "..."
+            if len(field_id) > 27:
+                field_id = field_id[:27] + "..."
+
+            print(f"   {field_id:<30} {field_name:<40} {field_type:<20}")
+
+        if len(system_fields) > 20:
+            print(f"   ... and {len(system_fields) - 20} more system fields")
+
+        # Show custom fields
+        if custom_fields:
+            print(f"\n   Custom fields (showing first 20):")
+            print(f"   {'FIELD ID':<30} {'NAME':<40} {'TYPE':<20}")
+            print(f"   {'-'*30} {'-'*40} {'-'*20}")
+
+            for field in sorted(custom_fields, key=lambda x: x.get('name', ''))[:20]:
+                field_id = field.get('id', 'N/A')
+                field_name = field.get('name', 'N/A')
+                field_type = field.get('schema', {}).get('type', 'N/A')
+
+                if len(field_name) > 37:
+                    field_name = field_name[:37] + "..."
+                if len(field_id) > 27:
+                    field_id = field_id[:27] + "..."
+
+                print(f"   {field_id:<30} {field_name:<40} {field_type:<20}")
+
+            if len(custom_fields) > 20:
+                print(f"   ... and {len(custom_fields) - 20} more custom fields")
+
+    except Exception as e:
+        print(f"   ⚠️  Warning: Could not fetch fields: {e}")
+
     # Step 3: Ask user for input
     print("\n" + "="*80)
     print("3️⃣ Let's search for your version!")
@@ -163,7 +236,7 @@ def main():
     else:
         print(f"   In all projects")
     print("="*80)
-    
+
     # Step 4: Try different search methods
     search_methods = []
     
