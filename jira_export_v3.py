@@ -102,8 +102,8 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     print(f"Searching for issues with JQL: {jql}")
     print(f"Using API endpoint: {jira_url}/rest/api/3/search/jql")
     
-    # Search issues with specific fields including Release announce type (customfield_11823)
-    fields_to_fetch = ["key", "summary", "components", "customfield_11823"]
+    # Search issues with specific fields including Release announce type (customfield_11823) and Short description (customfield_14958)
+    fields_to_fetch = ["key", "summary", "components", "customfield_11823", "customfield_14958"]
     
     try:
         result = search_issues(jira_url, auth, jql, fields_to_fetch)
@@ -123,7 +123,7 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     grouped_data = {}
     all_components = set()
     ungrouped_count = 0
-    
+
     # Group components by service groups
     service_groups = {
         'GP': set(),
@@ -131,17 +131,32 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
         'SPE system': set(),
         'Replay system': set()
     }
+
+    # Group short descriptions by components
+    short_descriptions_by_component = {}
     
     for issue in issues:
         # Extract components
         components = [comp['name'] for comp in issue['fields'].get('components', [])]
         all_components.update(components)
-        
+
         # Classify components by service group
         for component in components:
             group = get_service_group(component)
             service_groups[group].add(component)
-        
+
+        # Get Short description (customfield_14958)
+        short_description = issue['fields'].get('customfield_14958')
+        if short_description:
+            # Store short description for each component
+            for component in components:
+                if component not in short_descriptions_by_component:
+                    short_descriptions_by_component[component] = []
+                short_descriptions_by_component[component].append({
+                    'key': issue['key'],
+                    'description': short_description
+                })
+
         # Get Release announce type value (customfield_11823)
         announce_type_field = issue['fields'].get('customfield_11823')
         
@@ -173,13 +188,20 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     
     # Create final export structure with service groups
     export_data = grouped_data.copy()
-    
+
+    # Add short descriptions by component (sorted by component name)
+    if short_descriptions_by_component:
+        short_desc_data = {}
+        for component in sorted(short_descriptions_by_component.keys()):
+            short_desc_data[component] = short_descriptions_by_component[component]
+        export_data['short_descriptions'] = short_desc_data
+
     # Add service groups (only non-empty ones)
     services_data = {}
     for group_name, components in service_groups.items():
         if components:
             services_data[group_name] = sorted(list(components))
-    
+
     export_data['services'] = services_data
     export_data['all_components'] = sorted(list(all_components))
     
@@ -190,9 +212,9 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     # Save to JSON file
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(export_data, f, indent=2, ensure_ascii=False)
-    
-    total_issues = sum(len(issues) for key, issues in export_data.items() 
-                       if key not in ['services', 'all_components'])
+
+    total_issues = sum(len(issues) for key, issues in export_data.items()
+                       if key not in ['services', 'all_components', 'short_descriptions'])
     print(f"\nExported {total_issues} issues to {output_file}")
     
     return export_data
@@ -203,29 +225,37 @@ def print_summary(export_data: Dict[str, Any]):
     print(f"\n{'='*60}")
     print(f"RELEASE NOTES SUMMARY (Grouped by Release announce type)")
     print(f"{'='*60}")
-    
+
     # Count total issues
-    total_issues = sum(len(issues) for key, issues in export_data.items() 
-                       if key not in ['services', 'all_components'])
+    total_issues = sum(len(issues) for key, issues in export_data.items()
+                       if key not in ['services', 'all_components', 'short_descriptions'])
     print(f"Total issues: {total_issues}\n")
-    
+
     # Print issues by Release announce type
     for group_name, issues in export_data.items():
-        if group_name in ['services', 'all_components']:
+        if group_name in ['services', 'all_components', 'short_descriptions']:
             continue
         print(f"{group_name.upper()}:")
         for issue in issues:
             print(f"  - {issue}")
         print()
-    
+
+    # Print short descriptions by component
+    if 'short_descriptions' in export_data and export_data['short_descriptions']:
+        print("SHORT DESCRIPTIONS (by component):")
+        for component, descriptions in export_data['short_descriptions'].items():
+            print(f"\n  {component}:")
+            for desc_item in descriptions:
+                print(f"    - [{desc_item['key']}] {desc_item['description']}")
+
     # Print service groups
     if 'services' in export_data and export_data['services']:
-        print("SERVICE GROUPS:")
+        print("\nSERVICE GROUPS:")
         for service_group, components in export_data['services'].items():
             print(f"\n  {service_group}:")
             for component in components:
                 print(f"    - {component}")
-    
+
     print(f"\n{'='*60}")
 
 
