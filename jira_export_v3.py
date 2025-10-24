@@ -218,11 +218,10 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
                 if group_name not in short_descriptions_by_announce_type:
                     short_descriptions_by_announce_type[group_name] = []
 
-                # Add short description to the same announce type group
-                short_descriptions_by_announce_type[group_name].append({
-                    'key': issue['key'],
-                    'description': short_description
-                })
+                # Add short description to the same announce type group (same format as issues)
+                short_descriptions_by_announce_type[group_name].append(
+                    f"{issue['key']} - {short_description}"
+                )
     
     if ungrouped_count > 0:
         print(f"\n⚠️  Warning: {ungrouped_count} issues without Release announce type")
@@ -283,8 +282,8 @@ def print_summary(export_data: Dict[str, Any]):
         print("SHORT DESCRIPTIONS (by release announce type):")
         for announce_type, descriptions in export_data['short_descriptions'].items():
             print(f"\n  {announce_type}:")
-            for desc_item in descriptions:
-                print(f"    - [{desc_item['key']}] {desc_item['description']}")
+            for desc in descriptions:
+                print(f"    - {desc}")
 
     # Print service groups
     if 'services' in export_data and export_data['services']:
