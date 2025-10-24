@@ -61,13 +61,46 @@ def search_issues(jira_url: str, auth: HTTPBasicAuth, jql: str, fields: list, ma
     return response.json()
 
 
+def parse_adf_to_text(adf_content: Dict[str, Any]) -> str:
+    """
+    Parse Atlassian Document Format (ADF) to plain text
+
+    Args:
+        adf_content: ADF document structure
+
+    Returns:
+        Plain text extracted from ADF
+    """
+    if not adf_content or not isinstance(adf_content, dict):
+        return ""
+
+    text_parts = []
+
+    def extract_text(node):
+        if isinstance(node, dict):
+            # If it's a text node, extract the text
+            if node.get('type') == 'text':
+                text_parts.append(node.get('text', ''))
+
+            # Recursively process content
+            if 'content' in node:
+                for child in node['content']:
+                    extract_text(child)
+        elif isinstance(node, list):
+            for item in node:
+                extract_text(item)
+
+    extract_text(adf_content)
+    return ' '.join(text_parts).strip()
+
+
 def get_service_group(component_name: str) -> str:
     """
     Determine service group based on component name prefix
-    
+
     Args:
         component_name: Component/service name
-    
+
     Returns:
         Group name: 'GP', 'Jackpot system', 'SPE system', or 'Replay system'
     """
@@ -132,9 +165,9 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
         'Replay system': set()
     }
 
-    # Group short descriptions by components
-    short_descriptions_by_component = {}
-    
+    # Group short descriptions by release announce type
+    short_descriptions_by_announce_type = {}
+
     for issue in issues:
         # Extract components
         components = [comp['name'] for comp in issue['fields'].get('components', [])]
@@ -144,18 +177,6 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
         for component in components:
             group = get_service_group(component)
             service_groups[group].add(component)
-
-        # Get Short description (customfield_14958)
-        short_description = issue['fields'].get('customfield_14958')
-        if short_description:
-            # Store short description for each component
-            for component in components:
-                if component not in short_descriptions_by_component:
-                    short_descriptions_by_component[component] = []
-                short_descriptions_by_component[component].append({
-                    'key': issue['key'],
-                    'description': short_description
-                })
 
         # Get Release announce type value (customfield_11823)
         announce_type_field = issue['fields'].get('customfield_11823')
@@ -179,9 +200,29 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
         # Initialize group if not exists
         if group_name not in grouped_data:
             grouped_data[group_name] = []
-        
+
         # Add issue to group
         grouped_data[group_name].append(f"{issue['key']} - {issue['fields']['summary']}")
+
+        # Get Short description (customfield_14958) and add to the same group
+        short_description_raw = issue['fields'].get('customfield_14958')
+        if short_description_raw:
+            # Parse ADF format to plain text
+            if isinstance(short_description_raw, dict):
+                short_description = parse_adf_to_text(short_description_raw)
+            else:
+                short_description = str(short_description_raw)
+
+            if short_description:
+                # Initialize short descriptions group if not exists
+                if group_name not in short_descriptions_by_announce_type:
+                    short_descriptions_by_announce_type[group_name] = []
+
+                # Add short description to the same announce type group
+                short_descriptions_by_announce_type[group_name].append({
+                    'key': issue['key'],
+                    'description': short_description
+                })
     
     if ungrouped_count > 0:
         print(f"\n⚠️  Warning: {ungrouped_count} issues without Release announce type")
@@ -189,12 +230,9 @@ def export_issues_by_version(project_key: str, fix_version: str, output_file: st
     # Create final export structure with service groups
     export_data = grouped_data.copy()
 
-    # Add short descriptions by component (sorted by component name)
-    if short_descriptions_by_component:
-        short_desc_data = {}
-        for component in sorted(short_descriptions_by_component.keys()):
-            short_desc_data[component] = short_descriptions_by_component[component]
-        export_data['short_descriptions'] = short_desc_data
+    # Add short descriptions by release announce type
+    if short_descriptions_by_announce_type:
+        export_data['short_descriptions'] = short_descriptions_by_announce_type
 
     # Add service groups (only non-empty ones)
     services_data = {}
@@ -240,11 +278,11 @@ def print_summary(export_data: Dict[str, Any]):
             print(f"  - {issue}")
         print()
 
-    # Print short descriptions by component
+    # Print short descriptions by release announce type
     if 'short_descriptions' in export_data and export_data['short_descriptions']:
-        print("SHORT DESCRIPTIONS (by component):")
-        for component, descriptions in export_data['short_descriptions'].items():
-            print(f"\n  {component}:")
+        print("SHORT DESCRIPTIONS (by release announce type):")
+        for announce_type, descriptions in export_data['short_descriptions'].items():
+            print(f"\n  {announce_type}:")
             for desc_item in descriptions:
                 print(f"    - [{desc_item['key']}] {desc_item['description']}")
 
