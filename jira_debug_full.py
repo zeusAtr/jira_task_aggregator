@@ -108,6 +108,33 @@ def get_all_fields(jira_url: str, auth: HTTPBasicAuth):
     return response.json()
 
 
+def get_project_fields(jira_url: str, auth: HTTPBasicAuth, project_key: str):
+    """Get fields available for a specific project"""
+    url = f"{jira_url}/rest/api/3/project/{project_key}"
+    headers = {"Accept": "application/json"}
+
+    response = requests.get(url, headers=headers, auth=auth)
+    response.raise_for_status()
+
+    return response.json()
+
+
+def get_create_meta_fields(jira_url: str, auth: HTTPBasicAuth, project_key: str):
+    """Get fields from create metadata for a project"""
+    url = f"{jira_url}/rest/api/3/issue/createmeta"
+    headers = {"Accept": "application/json"}
+
+    params = {
+        "projectKeys": project_key,
+        "expand": "projects.issuetypes.fields"
+    }
+
+    response = requests.get(url, headers=headers, auth=auth, params=params)
+    response.raise_for_status()
+
+    return response.json()
+
+
 def main():
     print("="*80)
     print("🔍 COMPREHENSIVE JIRA DEBUG TOOL")
@@ -224,11 +251,104 @@ def main():
     
     project_key = input("\nEnter PROJECT KEY (or press Enter to search all projects): ").strip().upper()
     version_name = input("Enter VERSION name (e.g., 43.68.5): ").strip()
-    
+
     if not version_name:
         print("❌ Version name is required!")
         return
-    
+
+    # Step 3.5: Show project fields if project is specified
+    if project_key:
+        print("\n" + "="*80)
+        print(f"3.5️⃣ Fetching fields for project {project_key}...")
+        print("="*80)
+
+        try:
+            # Get create metadata which contains field information
+            metadata = get_create_meta_fields(jira_url, auth, project_key)
+
+            if metadata.get('projects'):
+                project_data = metadata['projects'][0]
+                print(f"\n✅ Project: {project_data.get('name', project_key)}")
+
+                issue_types = project_data.get('issuetypes', [])
+                print(f"   Found {len(issue_types)} issue types\n")
+
+                # Collect all unique fields across all issue types
+                all_fields = {}
+
+                for issue_type in issue_types:
+                    fields = issue_type.get('fields', {})
+                    for field_id, field_info in fields.items():
+                        if field_id not in all_fields:
+                            all_fields[field_id] = field_info
+
+                print(f"   Total unique fields in project: {len(all_fields)}\n")
+
+                # Categorize fields
+                required_fields = []
+                optional_fields = []
+
+                for field_id, field_info in all_fields.items():
+                    if field_info.get('required', False):
+                        required_fields.append((field_id, field_info))
+                    else:
+                        optional_fields.append((field_id, field_info))
+
+                print(f"   🔴 Required fields: {len(required_fields)}")
+                print(f"   ⚪ Optional fields: {len(optional_fields)}\n")
+
+                # Show required fields
+                if required_fields:
+                    print(f"   Required fields:")
+                    print(f"   {'FIELD ID':<30} {'NAME':<40} {'TYPE':<20}")
+                    print(f"   {'-'*30} {'-'*40} {'-'*20}")
+
+                    for field_id, field_info in sorted(required_fields, key=lambda x: x[1].get('name', ''))[:15]:
+                        field_name = field_info.get('name', 'N/A')
+                        field_type = field_info.get('schema', {}).get('type', 'N/A')
+
+                        if len(field_name) > 37:
+                            field_name = field_name[:37] + "..."
+                        if len(field_id) > 27:
+                            field_id = field_id[:27] + "..."
+
+                        print(f"   {field_id:<30} {field_name:<40} {field_type:<20}")
+
+                    if len(required_fields) > 15:
+                        print(f"   ... and {len(required_fields) - 15} more required fields")
+
+                # Show some optional fields
+                if optional_fields:
+                    print(f"\n   Optional fields (showing first 20):")
+                    print(f"   {'FIELD ID':<30} {'NAME':<40} {'TYPE':<20}")
+                    print(f"   {'-'*30} {'-'*40} {'-'*20}")
+
+                    for field_id, field_info in sorted(optional_fields, key=lambda x: x[1].get('name', ''))[:20]:
+                        field_name = field_info.get('name', 'N/A')
+                        field_type = field_info.get('schema', {}).get('type', 'N/A')
+
+                        if len(field_name) > 37:
+                            field_name = field_name[:37] + "..."
+                        if len(field_id) > 27:
+                            field_id = field_id[:27] + "..."
+
+                        print(f"   {field_id:<30} {field_name:<40} {field_type:<20}")
+
+                    if len(optional_fields) > 20:
+                        print(f"   ... and {len(optional_fields) - 20} more optional fields")
+
+                # Show issue types
+                print(f"\n   📋 Issue types in {project_key}:")
+                for issue_type in issue_types:
+                    name = issue_type.get('name', 'N/A')
+                    fields_count = len(issue_type.get('fields', {}))
+                    print(f"      - {name} ({fields_count} fields)")
+            else:
+                print(f"   ⚠️  No metadata found for project {project_key}")
+
+        except Exception as e:
+            print(f"   ⚠️  Warning: Could not fetch project fields: {e}")
+
     print("\n" + "="*80)
     print(f"4️⃣ Searching for version: {version_name}")
     if project_key:
