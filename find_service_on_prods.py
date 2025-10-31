@@ -7,7 +7,7 @@
 import sys
 import argparse
 import re
-from typing import Dict, Set
+from typing import Dict, Set, List, Tuple
 from pathlib import Path
 from collections import defaultdict
 
@@ -18,6 +18,7 @@ class ServiceFinder:
         self.service_filter = service_filter
         self.services_by_prod: Dict[str, Set[str]] = defaultdict(set)  # {service: {prods}}
         self.prods_by_service: Dict[str, Set[str]] = defaultdict(set)  # {prod: {services}}
+        self.service_locations: Dict[Tuple[str, str], Dict] = {}  # {(prod, service): {file_path, line_start, line_end, indent}}
         
     def is_yml_file(self, filename: str) -> bool:
         """Проверяет, является ли файл yml/yaml файлом."""
@@ -40,12 +41,14 @@ class ServiceFinder:
         in_services_block = False
         services_indent = -1
         current_service_indent = -1
+        current_service_name = None
+        current_service_start = -1
         
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
                 
-                for line in lines:
+                for line_num, line in enumerate(lines):
                     # Пропускаем пустые строки и комментарии
                     if not line.strip() or line.strip().startswith('#'):
                         continue
@@ -64,6 +67,14 @@ class ServiceFinder:
                         # Проверяем, не вышли ли мы из блока services
                         if line_indent <= services_indent and line.strip().endswith(':'):
                             if not line.strip().startswith('-'):
+                                # Сохраняем предыдущий сервис
+                                if current_service_name:
+                                    self.service_locations[(prod_name, current_service_name)] = {
+                                        'file_path': file_path,
+                                        'line_start': current_service_start,
+                                        'line_end': line_num - 1,
+                                        'indent': current_service_indent
+                                    }
                                 in_services_block = False
                                 continue
                         
@@ -76,10 +87,31 @@ class ServiceFinder:
                             # Проверяем, что это сервис (на один уровень глубже services)
                             if indent > services_indent:
                                 if current_service_indent == -1 or indent <= current_service_indent:
+                                    # Сохраняем предыдущий сервис
+                                    if current_service_name:
+                                        self.service_locations[(prod_name, current_service_name)] = {
+                                            'file_path': file_path,
+                                            'line_start': current_service_start,
+                                            'line_end': line_num - 1,
+                                            'indent': current_service_indent
+                                        }
+                                    
                                     current_service_indent = indent
+                                    current_service_name = service_name
+                                    current_service_start = line_num
+                                    
                                     # Добавляем связи
                                     self.services_by_prod[service_name].add(prod_name)
                                     self.prods_by_service[prod_name].add(service_name)
+                
+                # Сохраняем последний сервис
+                if current_service_name:
+                    self.service_locations[(prod_name, current_service_name)] = {
+                        'file_path': file_path,
+                        'line_start': current_service_start,
+                        'line_end': len(lines) - 1,
+                        'indent': current_service_indent
+                    }
                             
         except Exception as e:
             print(f"⚠️  Ошибка при чтении {file_path}: {e}", file=sys.stderr)
@@ -108,6 +140,174 @@ class ServiceFinder:
         for yml_file in yml_files:
             prod_name = self.extract_file_name(yml_file.name)
             self.extract_services(yml_file, prod_name)
+    
+    def add_active_profile(self, profile_name: str, dry_run: bool = False) -> None:
+        """Добавляет активный профиль к сервисам на продах."""
+        if not self.service_filter:
+            print("⚠️  Укажите название сервиса с помощью -s")
+            return
+        
+        matched_services = {s: prods for s, prods in self.services_by_prod.items() 
+                          if self.matches_service_filter(s)}
+        
+        if not matched_services:
+            print(f"❌ Сервисы, соответствующие '{self.service_filter}', не найдены")
+            return
+        
+        modifications = []
+        
+        for service_name, prods in matched_services.items():
+            for prod_name in prods:
+                key = (prod_name, service_name)
+                if key not in self.service_locations:
+                    print(f"⚠️  Не найдена информация о расположении сервиса {service_name} на {prod_name}")
+                    continue
+                
+                location = self.service_locations[key]
+                file_path = location['file_path']
+                line_start = location['line_start']
+                line_end = location['line_end']
+                indent = location['indent']
+                
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    
+                    # Ищем строку active_profiles в блоке сервиса
+                    active_profiles_line = None
+                    active_profiles_indent = indent + 2  # Обычно на 2 пробела глубже
+                    
+                    for i in range(line_start + 1, min(line_end + 1, len(lines))):
+                        line = lines[i]
+                        current_indent = len(line) - len(line.lstrip())
+                        
+                        # Проверяем, не вышли ли за пределы текущего сервиса
+                        if current_indent <= indent and line.strip():
+                            break
+                        
+                        # Ищем active_profiles
+                        if re.match(r'^\s*active_profiles:\s*(.*)$', line):
+                            active_profiles_line = i
+                            break
+                    
+                    if active_profiles_line is not None:
+                        # active_profiles уже существует, добавляем к списку
+                        line = lines[active_profiles_line]
+                        match = re.match(r'^(\s*active_profiles:\s*)(.*)$', line)
+                        if match:
+                            prefix = match.group(1)
+                            existing_profiles = match.group(2).strip()
+                            
+                            # Парсим существующие профили
+                            if existing_profiles:
+                                # Убираем возможные кавычки и split по запятой
+                                existing_profiles = existing_profiles.strip('"\'')
+                                profiles_list = [p.strip() for p in existing_profiles.split(',')]
+                                
+                                # Проверяем, нет ли уже такого профиля
+                                if profile_name in profiles_list:
+                                    print(f"ℹ️  {prod_name}/{service_name}: профиль '{profile_name}' уже существует")
+                                    continue
+                                
+                                profiles_list.append(profile_name)
+                                new_profiles = ', '.join(profiles_list)
+                            else:
+                                new_profiles = profile_name
+                            
+                            new_line = f"{prefix}{new_profiles}\n"
+                            modifications.append({
+                                'file_path': file_path,
+                                'prod': prod_name,
+                                'service': service_name,
+                                'action': 'update',
+                                'line_num': active_profiles_line,
+                                'old_line': line,
+                                'new_line': new_line
+                            })
+                    else:
+                        # active_profiles не существует, добавляем новую строку
+                        # Вставляем после строки с именем сервиса
+                        spaces = ' ' * active_profiles_indent
+                        new_line = f"{spaces}active_profiles: {profile_name}\n"
+                        
+                        modifications.append({
+                            'file_path': file_path,
+                            'prod': prod_name,
+                            'service': service_name,
+                            'action': 'insert',
+                            'line_num': line_start + 1,
+                            'new_line': new_line
+                        })
+                
+                except Exception as e:
+                    print(f"❌ Ошибка при обработке {file_path}: {e}", file=sys.stderr)
+                    continue
+        
+        if not modifications:
+            print("ℹ️  Нет изменений для применения")
+            return
+        
+        # Выводим предварительный просмотр
+        print("=" * 80)
+        print(f"📝 Планируемые изменения {'(DRY RUN)' if dry_run else ''}")
+        print("=" * 80)
+        print()
+        
+        for mod in modifications:
+            print(f"📄 Файл: {mod['file_path'].name}")
+            print(f"   Прод: {mod['prod']}")
+            print(f"   Сервис: {mod['service']}")
+            print(f"   Действие: {'Обновление' if mod['action'] == 'update' else 'Добавление'} active_profiles")
+            
+            if mod['action'] == 'update':
+                print(f"   Было:  {mod['old_line'].rstrip()}")
+                print(f"   Стало: {mod['new_line'].rstrip()}")
+            else:
+                print(f"   Добавлено: {mod['new_line'].rstrip()}")
+            print()
+        
+        print("=" * 80)
+        print(f"Всего изменений: {len(modifications)}")
+        print("=" * 80)
+        
+        if dry_run:
+            print("\n✅ Режим dry-run: изменения не применены")
+            return
+        
+        # Применяем изменения
+        # Группируем по файлам
+        files_to_modify = defaultdict(list)
+        for mod in modifications:
+            files_to_modify[mod['file_path']].append(mod)
+        
+        modified_count = 0
+        for file_path, file_mods in files_to_modify.items():
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                
+                # Сортируем модификации по номеру строки в обратном порядке
+                # чтобы вставки не сдвигали номера строк
+                file_mods.sort(key=lambda x: x['line_num'], reverse=True)
+                
+                for mod in file_mods:
+                    if mod['action'] == 'update':
+                        lines[mod['line_num']] = mod['new_line']
+                    else:  # insert
+                        lines.insert(mod['line_num'], mod['new_line'])
+                
+                # Записываем обратно
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+                
+                modified_count += 1
+                print(f"✅ Обновлен: {file_path}")
+                
+            except Exception as e:
+                print(f"❌ Ошибка при изменении {file_path}: {e}", file=sys.stderr)
+        
+        print()
+        print(f"✅ Успешно изменено файлов: {modified_count}")
     
     def print_prods_with_service(self) -> None:
         """Выводит список продов с указанным сервисом."""
@@ -282,6 +482,12 @@ def parse_arguments():
   # Экспортировать в CSV
   %(prog)s /path/to/configs -s operator_api -o report.csv
   %(prog)s /path/to/configs --services-summary -o summary.csv --csv-mode summary
+  
+  # Добавить активный профиль к сервису (dry-run)
+  %(prog)s /path/to/configs -s operator_api --add-active-profile staging --dry-run
+  
+  # Добавить активный профиль к сервису
+  %(prog)s /path/to/configs -s operator_api --add-active-profile production
         """
     )
     
@@ -297,6 +503,10 @@ def parse_arguments():
     parser.add_argument('--csv-mode', choices=['services', 'prods', 'summary'],
                        default='services',
                        help='Режим экспорта CSV: services (по сервисам), prods (по продам), summary (сводка)')
+    parser.add_argument('--add-active-profile', metavar='PROFILE',
+                       help='Добавить активный профиль к найденным сервисам')
+    parser.add_argument('--dry-run', action='store_true',
+                       help='Показать изменения без их применения (для --add-active-profile)')
     
     return parser.parse_args()
 
@@ -308,7 +518,12 @@ def main():
     finder.scan_directory()
     
     # Определяем, что показывать
-    if args.prod:
+    if args.add_active_profile:
+        if not args.service_filter:
+            print("❌ Для добавления профиля необходимо указать сервис с помощью -s")
+            sys.exit(1)
+        finder.add_active_profile(args.add_active_profile, args.dry_run)
+    elif args.prod:
         finder.print_services_on_prod(args.prod)
     elif args.services_summary:
         finder.print_services_summary()
